@@ -1,32 +1,35 @@
 const fs = require('fs');
 const path = require('path');
+const defaultVulnerabilities = require('./vulnerabilities');
 
-// --- List known vulnerable versions (update as needed) ---
-const vulnerabilities = {
-  backslash: ['0.2.1'],
-  'chalk-template': ['1.1.1'],
-  'supports-hyperlinks': ['4.1.1'],
-  'has-ansi': ['6.0.1'],
-  'simple-swizzle': ['0.2.3'],
-  'color-string': ['2.1.1'],
-  'error-ex': ['1.3.3'],
-  'color-name': ['2.0.1'],
-  'is-arrayish': ['0.3.3'],
-  'slice-ansi': ['7.1.1'],
-  'color-convert': ['3.1.1'],
-  'wrap-ansi': ['9.0.1'],
-  'ansi-regex': ['6.2.1'],
-  'supports-color': ['10.2.1'],
-  'strip-ansi': ['7.1.1'],
-  chalk: ['5.6.1'],
-  debug: ['4.4.2'],
-  'ansi-styles': ['6.2.2'],
-};
+// --- Helper: Load custom vulnerabilities file if provided ---
+function loadCustomVulnerabilities(filePath) {
+  if (!filePath) return {};
+  try {
+    if (filePath.endsWith('.json')) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } else if (filePath.endsWith('.js')) {
+      return require(path.resolve(filePath));
+    }
+  } catch (e) {
+    console.error('Error loading custom vulnerabilities file:', e);
+  }
+  return {};
+}
+
+// --- Helper: Merge vulnerabilities ---
+function mergeVulnerabilities(base, custom) {
+  const merged = { ...base };
+  Object.entries(custom).forEach(([pkg, versions]) => {
+    if (!merged[pkg]) merged[pkg] = [];
+    merged[pkg] = Array.from(new Set([...merged[pkg], ...versions]));
+  });
+  return merged;
+}
 
 // --- Helper: Check if a version is vulnerable ---
-function isVulnerable(pkg, version) {
+function isVulnerable(pkg, version, vulnerabilities) {
   if (!vulnerabilities[pkg]) return false;
-  // Remove any leading ^, ~, >=, <=, etc.
   const cleanVersion = version.replace(/^[^\d]*/, '');
   return vulnerabilities[pkg].includes(cleanVersion);
 }
@@ -39,18 +42,15 @@ function getInstalledVersion(repoPath, pkg) {
       const pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       return pkgJson.version;
     }
-  } catch (e) {
-    // Ignore errors for missing packages
-  }
+  } catch (e) {}
   return null;
 }
 
 // --- Helper: Extract package versions from lock files ---
-function extractVersionsFromLock(lockFile) {
+function extractVersionsFromLock(lockFile, vulnerabilities) {
   const content = fs.readFileSync(lockFile, 'utf8');
   const result = {};
   Object.keys(vulnerabilities).forEach(pkg => {
-    // Match lines like: "chalk@5.6.1": { ... "version": "5.6.1"
     const regex = new RegExp(`"${pkg}@[^"]+":\\s*\\{[^\\}]*"version": "([^"]+)"`, 'g');
     let match;
     while ((match = regex.exec(content)) !== null) {
@@ -60,14 +60,14 @@ function extractVersionsFromLock(lockFile) {
   return result;
 }
 
-// --- Main: Scan all subfolders ---
-const parentDir = process.cwd();
-const folders = fs.readdirSync(parentDir).filter(f => fs.statSync(path.join(parentDir, f)).isDirectory());
-
-folders.forEach(folder => {
-  const repoPath = path.join(parentDir, folder);
+// --- Main: Scan a specific folder or file ---
+function scanTarget(targetPath, vulnerabilities) {
   let foundAny = false;
   let report = [];
+  let repoPath = targetPath;
+  if (fs.statSync(targetPath).isFile()) {
+    repoPath = path.dirname(targetPath);
+  }
 
   // Check package.json
   const pkgJsonPath = path.join(repoPath, 'package.json');
@@ -83,7 +83,7 @@ folders.forEach(folder => {
                 source: 'package.json',
                 package: pkg,
                 version: version,
-                vulnerable: isVulnerable(pkg, version)
+                vulnerable: isVulnerable(pkg, version, vulnerabilities)
               });
               foundAny = true;
             }
@@ -99,13 +99,13 @@ folders.forEach(folder => {
   ['yarn.lock', 'package-lock.json'].forEach(lockName => {
     const lockPath = path.join(repoPath, lockName);
     if (fs.existsSync(lockPath)) {
-      const lockVersions = extractVersionsFromLock(lockPath);
+      const lockVersions = extractVersionsFromLock(lockPath, vulnerabilities);
       Object.entries(lockVersions).forEach(([pkg, version]) => {
         report.push({
           source: lockName,
           package: pkg,
           version: version,
-          vulnerable: isVulnerable(pkg, version)
+          vulnerable: isVulnerable(pkg, version, vulnerabilities)
         });
         foundAny = true;
       });
@@ -120,7 +120,7 @@ folders.forEach(folder => {
         source: 'node_modules',
         package: pkg,
         version: installedVersion,
-        vulnerable: isVulnerable(pkg, installedVersion)
+        vulnerable: isVulnerable(pkg, installedVersion, vulnerabilities)
       });
       foundAny = true;
     }
@@ -128,12 +128,28 @@ folders.forEach(folder => {
 
   // Print results
   if (foundAny) {
-    console.log(`--- ${folder} ---`);
+    console.log(`--- ${path.basename(repoPath)} ---`);
     report.forEach(r => {
       console.log(`[${r.source}] ${r.package}@${r.version} : ${r.vulnerable ? '❌ VULNERABLE' : '✅ SAFE'}`);
     });
     console.log('');
   } else {
-    console.log(`⚠️ ${folder}: No relevant packages found.`);
+    console.log(`⚠️ ${path.basename(repoPath)}: No relevant packages found.`);
   }
-});
+}
+
+// --- CLI: Accept a file/folder argument and optional vulnerabilities file ---
+const argPath = process.argv[2];
+const customVulnFile = process.argv[3];
+const customVulns = loadCustomVulnerabilities(customVulnFile);
+const vulnerabilities = mergeVulnerabilities(defaultVulnerabilities, customVulns);
+
+if (argPath) {
+  scanTarget(path.resolve(argPath), vulnerabilities);
+} else {
+  const parentDir = process.cwd();
+  const folders = fs.readdirSync(parentDir).filter(f => fs.statSync(path.join(parentDir, f)).isDirectory());
+  folders.forEach(folder => {
+    scanTarget(path.join(parentDir, folder), vulnerabilities);
+  });
+}
