@@ -20,7 +20,9 @@ The `npm-yarn-scanner` is a tool designed to scan JavaScript projects managed by
 git clone https://github.com/UKHomeOffice/npm-yarn-scanner.git
 cd npm-yarn-scanner
 ```
+## run
 
+this will scan repos from your parent directory
 ---
 
 
