@@ -22,11 +22,11 @@ cd npm-yarn-scanner
 ```
 ## Run
 
-
 ---
-this will scan repos from your parent directory
+- Go to your parent directory where you have all your repos 
+- Then run node with the full path name of where you have this repo
 
 ```bash
-node index.js
+node npm-yarn-scanner/index.js
 ```
 
