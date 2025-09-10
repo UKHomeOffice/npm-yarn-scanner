@@ -60,6 +60,19 @@ function extractVersionsFromLock(lockFile, vulnerabilities) {
   return result;
 }
 
+// --- Helper: Recursively get all subfolders ---
+function getAllSubfolders(dir) {
+  let results = [dir];
+  const list = fs.readdirSync(dir);
+  list.forEach(file => {
+    const fullPath = path.join(dir, file);
+    if (fs.statSync(fullPath).isDirectory()) {
+      results = results.concat(getAllSubfolders(fullPath));
+    }
+  });
+  return results;
+}
+
 // --- Main: Scan a specific folder or file ---
 function scanTarget(targetPath, vulnerabilities) {
   let foundAny = false;
@@ -145,11 +158,22 @@ const customVulns = loadCustomVulnerabilities(customVulnFile);
 const vulnerabilities = mergeVulnerabilities(defaultVulnerabilities, customVulns);
 
 if (argPath) {
-  scanTarget(path.resolve(argPath), vulnerabilities);
+  const resolvedPath = path.resolve(argPath);
+  let scanFolders = [];
+  if (fs.existsSync(resolvedPath)) {
+    if (fs.statSync(resolvedPath).isFile()) {
+      scanFolders = getAllSubfolders(path.dirname(resolvedPath));
+    } else if (fs.statSync(resolvedPath).isDirectory()) {
+      scanFolders = getAllSubfolders(resolvedPath);
+    }
+  }
+  scanFolders.forEach(folder => {
+    scanTarget(folder, vulnerabilities);
+  });
 } else {
   const parentDir = process.cwd();
-  const folders = fs.readdirSync(parentDir).filter(f => fs.statSync(path.join(parentDir, f)).isDirectory());
+  const folders = getAllSubfolders(parentDir);
   folders.forEach(folder => {
-    scanTarget(path.join(parentDir, folder), vulnerabilities);
+    scanTarget(folder, vulnerabilities);
   });
 }
